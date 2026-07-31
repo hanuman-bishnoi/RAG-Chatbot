@@ -3,13 +3,18 @@ import os
 import httpx
 import streamlit as st
 
-from src.config import CHAT_MODEL, DATA_DIR, EMBEDDING_MODEL, OLLAMA_BASE_URL
+from src.config import CHAT_MODEL, DATA_DIR, EMBEDDING_MODEL, LLM_PROVIDER, OLLAMA_BASE_URL
 from src.loader import SUPPORTED_EXTENSIONS
 from src.rag_pipeline import RAGPipeline
+from src import history
 
 OLLAMA_HELP = (
     f"Can't reach Ollama at {OLLAMA_BASE_URL}. Install it from https://ollama.com, "
     f"run `ollama pull {CHAT_MODEL}`, then make sure the Ollama app/service is running."
+)
+GEMINI_HELP = (
+    "Gemini request failed. Check that GEMINI_API_KEY in your .env file is set and valid "
+    "(get one free at https://aistudio.google.com/apikey)."
 )
 
 FILE_ICONS = {".pdf": "📕", ".txt": "📄", ".md": "📝"}
@@ -50,6 +55,12 @@ st.markdown(
     }
     .doc-card .name { flex: 1; word-break: break-word; }
 
+    .chat-card {
+        padding: 7px 10px; border-radius: 10px; font-size: 13px; color: #374151;
+        text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .chat-card.active { background: #eef0ff; color: #4338ca; font-weight: 600; }
+
     .stChatMessage { border-radius: 14px !important; }
 
     .empty-state {
@@ -71,7 +82,7 @@ st.markdown(
         <div class="icon">💬</div>
         <div>
             <h1>RAG Chatbot</h1>
-            <p>Ask questions about your own documents — 100% local, no API key</p>
+            <p>Ask questions about your own documents</p>
         </div>
     </div>
     """,
@@ -84,7 +95,10 @@ def get_pipeline():
     return RAGPipeline()
 
 
-def ollama_is_reachable() -> bool:
+def provider_is_reachable() -> bool:
+    if LLM_PROVIDER == "gemini":
+        from src.config import GEMINI_API_KEY
+        return bool(GEMINI_API_KEY and GEMINI_API_KEY != "your-gemini-key-here")
     try:
         httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=2)
         return True
@@ -92,13 +106,81 @@ def ollama_is_reachable() -> bool:
         return False
 
 
+if "session_id" not in st.session_state:
+    sessions = history.list_sessions()
+    st.session_state.session_id = sessions[0]["id"] if sessions else history.create_session()
+    st.session_state.messages = history.get_messages(st.session_state.session_id)
+
+
 with st.sidebar:
+    provider_label = "Gemini" if LLM_PROVIDER == "gemini" else "Ollama"
     st.subheader("⚙️ Status")
-    if ollama_is_reachable():
-        st.markdown('<span class="status-pill pill-ok">🟢 Ollama connected</span>', unsafe_allow_html=True)
+    if provider_is_reachable():
+        st.markdown(f'<span class="status-pill pill-ok">🟢 {provider_label} ready</span>', unsafe_allow_html=True)
     else:
-        st.markdown('<span class="status-pill pill-bad">🔴 Ollama offline</span>', unsafe_allow_html=True)
+        st.markdown(f'<span class="status-pill pill-bad">🔴 {provider_label} not configured</span>', unsafe_allow_html=True)
     st.caption(f"Chat model: `{CHAT_MODEL}`  ·  Embeddings: `{EMBEDDING_MODEL}`")
+
+    st.divider()
+
+    st.subheader("🗂️ Chats")
+    if st.button("➕ New chat", use_container_width=True, type="primary"):
+        st.session_state.session_id = history.create_session()
+        st.session_state.messages = []
+        st.rerun()
+
+    if "renaming_id" not in st.session_state:
+        st.session_state.renaming_id = None
+
+    for session in history.list_sessions():
+        is_active = session["id"] == st.session_state.session_id
+
+        if st.session_state.renaming_id == session["id"]:
+            new_title = st.text_input(
+                "Rename chat",
+                value=session["title"],
+                key=f"rename_input_{session['id']}",
+                label_visibility="collapsed",
+            )
+            save_col, cancel_col = st.columns(2)
+            with save_col:
+                if st.button("✅ Save", key=f"save_{session['id']}", use_container_width=True):
+                    history.rename_session(session["id"], new_title)
+                    st.session_state.renaming_id = None
+                    st.rerun()
+            with cancel_col:
+                if st.button("✖️ Cancel", key=f"cancel_{session['id']}", use_container_width=True):
+                    st.session_state.renaming_id = None
+                    st.rerun()
+            continue
+
+        row_col, rename_col, delete_col = st.columns([4, 1, 1])
+        with row_col:
+            if st.button(
+                session["title"],
+                key=f"chat_{session['id']}",
+                use_container_width=True,
+                type="secondary" if not is_active else "primary",
+            ):
+                st.session_state.session_id = session["id"]
+                st.session_state.messages = history.get_messages(session["id"])
+                st.rerun()
+        with rename_col:
+            if st.button("✏️", key=f"rename_{session['id']}", help="Rename this chat"):
+                st.session_state.renaming_id = session["id"]
+                st.rerun()
+        with delete_col:
+            if st.button("🗑️", key=f"delete_chat_{session['id']}", help="Delete this chat"):
+                history.delete_session(session["id"])
+                if is_active:
+                    remaining = history.list_sessions()
+                    if remaining:
+                        st.session_state.session_id = remaining[0]["id"]
+                        st.session_state.messages = history.get_messages(remaining[0]["id"])
+                    else:
+                        st.session_state.session_id = history.create_session()
+                        st.session_state.messages = []
+                st.rerun()
 
     st.divider()
 
@@ -160,20 +242,11 @@ with st.sidebar:
             except ValueError as exc:
                 st.error(str(exc))
 
-    if st.session_state.get("messages"):
-        st.divider()
-        if st.button("🗑️ Clear chat", use_container_width=True):
-            st.session_state.messages = []
-            st.rerun()
-
 try:
     pipeline = get_pipeline()
 except ValueError as exc:
     st.info(str(exc))
     st.stop()
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
 
 if not st.session_state.messages:
     st.markdown(
@@ -205,8 +278,13 @@ if question := st.chat_input("Ask a question about your documents..."):
             try:
                 result = pipeline.answer(question)
             except (httpx.ConnectError, ConnectionError):
-                st.error(OLLAMA_HELP)
+                st.error(OLLAMA_HELP if LLM_PROVIDER == "ollama" else GEMINI_HELP)
                 st.stop()
+            except Exception as exc:
+                if LLM_PROVIDER == "gemini":
+                    st.error(f"{GEMINI_HELP}\n\nDetails: {exc}")
+                    st.stop()
+                raise
             st.markdown(result["answer"])
             if result["sources"]:
                 with st.expander("📎 Sources"):
@@ -216,3 +294,4 @@ if question := st.chat_input("Ask a question about your documents..."):
     st.session_state.messages.append(
         {"role": "assistant", "content": result["answer"], "sources": result["sources"]}
     )
+    history.save_messages(st.session_state.session_id, st.session_state.messages)
