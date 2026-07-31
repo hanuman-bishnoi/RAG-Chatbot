@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "rag-chatbot": {
+      "command": ".venv/Scripts/python.exe",
+      "args": ["mcp_server.py"]
+    }
+  }
+}
