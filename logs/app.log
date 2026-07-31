@@ -35,3 +35,7 @@
 2026-07-31 12:56:09,913 - src.vector_db - INFO - Built FAISS index with 38 vectors (dim=384)
 2026-07-31 12:56:09,917 - src.vector_db - INFO - Saved index to C:\Users\Other User\Documents\New folder\rag-chatbot\vectorstore\index.faiss
 2026-07-31 13:18:17,744 - src.vector_db - INFO - Loaded index with 38 vectors
+2026-07-31 14:37:59,027 - src.vector_db - INFO - Loaded index with 38 vectors
+2026-07-31 15:10:52,323 - src.vector_db - INFO - Loaded index with 38 vectors
+2026-07-31 15:36:46,472 - src.vector_db - INFO - Loaded index with 38 vectors
+2026-07-31 15:37:53,327 - src.vector_db - INFO - Loaded index with 38 vectors
